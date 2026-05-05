@@ -1,56 +1,77 @@
-"""High-level pipeline: read → parse → validate → detect."""
+"""High-level pipeline: parse → validate → sample → detect → aggregate."""
+from __future__ import annotations
 
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
-from logdrift.detector import AnomalyEvent, Detector
-from logdrift.reader import read_records
+from logdrift.aggregator import Aggregator
+from logdrift.alerts import AlertConfig, dispatch
+from logdrift.detector import Detector
+from logdrift.parser import ParseError, parse_line
+from logdrift.sampler import Sampler, SamplerConfig
 from logdrift.schema import Schema, validate
 
 
 class ValidationError(Exception):
-    """Raised when a record fails schema validation in strict mode."""
+    """Raised when a record fails schema validation inside the pipeline."""
 
 
 def run_pipeline(
-    path: str,
+    lines: Iterator[str],
     schema: Optional[Schema] = None,
     detector: Optional[Detector] = None,
-    strict: bool = False,
-) -> Iterator[AnomalyEvent]:
+    aggregator: Optional[Aggregator] = None,
+    alert_config: Optional[AlertConfig] = None,
+    sampler_config: Optional[SamplerConfig] = None,
+    skip_invalid: bool = True,
+) -> List[Dict]:
+    """Process *lines* through the full logdrift pipeline.
+
+    Returns the list of records that were kept after sampling.
     """
-    Run the full logdrift pipeline on a file.
+    sampler = Sampler(sampler_config or SamplerConfig())
+    anomalies: List[Dict] = []
+    alert_handler = dispatch(alert_config) if alert_config else None
 
-    Args:
-        path: Path to the log file.
-        schema: Optional Schema to validate records against.
-        detector: Optional Detector instance; a default one is created if None.
-        strict: If True, raise ValidationError on schema violations instead of skipping.
+    for raw in lines:
+        # 1. parse
+        try:
+            record = parse_line(raw)
+        except ParseError:
+            continue
 
-    Yields:
-        AnomalyEvent instances for each detected anomaly.
-    """
-    if detector is None:
-        detector = Detector()
-
-    for record in read_records(path):
+        # 2. validate
         if schema is not None:
-            errors: List[str] = validate(schema, record)
+            errors = validate(schema, record)
             if errors:
-                if strict:
-                    raise ValidationError(f"Record failed validation: {errors}")
+                if not skip_invalid:
+                    raise ValidationError(errors)
                 continue
 
-        yield from detector.feed(record)
+        # 3. sample
+        if not sampler.should_keep(record):
+            continue
+
+        # 4. detect
+        if detector is not None:
+            for field, value in record.items():
+                event = detector.observe(field, str(value))
+                if event is not None:
+                    anomalies.append(event)
+                    if alert_handler is not None:
+                        alert_handler(event)
+
+        # 5. aggregate
+        if aggregator is not None:
+            aggregator.add(record)
+
+    return anomalies
 
 
-def summarise(events: List[AnomalyEvent]) -> dict:
-    """Return a simple summary dict from a list of anomaly events."""
-    by_field: dict = {}
-    for event in events:
-        key = event.field or "<unknown>"
-        by_field.setdefault(key, [])
-        by_field[key].append(event.reason)
-    return {
-        "total_anomalies": len(events),
-        "by_field": {k: len(v) for k, v in by_field.items()},
-    }
+def summarise(anomalies: List[Dict]) -> str:
+    """Return a brief human-readable summary of detected anomalies."""
+    if not anomalies:
+        return "No anomalies detected."
+    lines = [f"Anomalies detected: {len(anomalies)}"]
+    for ev in anomalies:
+        lines.append(f"  field={ev.field!r} value={ev.value!r} score={ev.score:.3f}")
+    return "\n".join(lines)
