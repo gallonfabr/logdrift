@@ -1,84 +1,66 @@
-"""Alert channels for logdrift anomaly notifications."""
-
+"""Alert emission for anomaly events."""
 from __future__ import annotations
 
 import json
 import sys
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, IO, List, Optional
 
 from logdrift.detector import AnomalyEvent
+from logdrift.throttle import Throttle, ThrottleConfig
 
 
 @dataclass
 class AlertConfig:
-    """Configuration for an alert channel."""
+    """Configuration for the alert system."""
 
-    channel: str  # 'stderr', 'stdout', 'json_file'
-    path: Optional[str] = None  # used when channel == 'json_file'
-    min_severity: float = 0.0  # only emit alerts with score >= this value
-
-
-AlertHandler = Callable[[AnomalyEvent], None]
+    min_score: float = 0.0
+    destination: str = "stderr"  # "stderr" | "stdout"
+    throttle: Optional[ThrottleConfig] = None
 
 
-def _make_stderr_handler() -> AlertHandler:
+def _make_stderr_handler(config: AlertConfig) -> Callable[[AnomalyEvent], None]:
+    return _make_stream_handler(config, sys.stderr)
+
+
+def _make_stdout_handler(config: AlertConfig) -> Callable[[AnomalyEvent], None]:
+    return _make_stream_handler(config, sys.stdout)
+
+
+def _make_stream_handler(
+    config: AlertConfig, stream: IO[str]
+) -> Callable[[AnomalyEvent], None]:
+    throttle = Throttle(config.throttle) if config.throttle else None
+
     def _handle(event: AnomalyEvent) -> None:
-        print(
-            f"[logdrift] ANOMALY field={event.field!r} "
-            f"value={event.value!r} score={event.score:.4f}",
-            file=sys.stderr,
-        )
-
-    return _handle
-
-
-def _make_stdout_handler() -> AlertHandler:
-    def _handle(event: AnomalyEvent) -> None:
-        print(
-            f"[logdrift] ANOMALY field={event.field!r} "
-            f"value={event.value!r} score={event.score:.4f}"
-        )
-
-    return _handle
-
-
-def _make_json_file_handler(path: str) -> AlertHandler:
-    def _handle(event: AnomalyEvent) -> None:
-        record = {
+        if event.score < config.min_score:
+            return
+        if throttle and not throttle.allow(event.field, str(event.value)):
+            return
+        payload = {
             "field": event.field,
             "value": event.value,
-            "score": event.score,
+            "score": round(event.score, 6),
         }
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        stream.write(json.dumps(payload) + "\n")
+        stream.flush()
 
     return _handle
 
 
-def build_handler(config: AlertConfig) -> AlertHandler:
-    """Return an AlertHandler that respects *min_severity* filtering."""
-    if config.channel == "stderr":
-        base = _make_stderr_handler()
-    elif config.channel == "stdout":
-        base = _make_stdout_handler()
-    elif config.channel == "json_file":
-        if not config.path:
-            raise ValueError("AlertConfig.path is required for 'json_file' channel")
-        base = _make_json_file_handler(config.path)
-    else:
-        raise ValueError(f"Unknown alert channel: {config.channel!r}")
-
-    threshold = config.min_severity
-
-    def _filtered(event: AnomalyEvent) -> None:
-        if event.score >= threshold:
-            base(event)
-
-    return _filtered
+def build_handler(config: AlertConfig) -> Callable[[AnomalyEvent], None]:
+    """Return an alert handler based on *config*."""
+    if config.destination == "stdout":
+        return _make_stdout_handler(config)
+    return _make_stderr_handler(config)
 
 
-def dispatch(event: AnomalyEvent, handlers: List[AlertHandler]) -> None:
-    """Send *event* to every registered handler."""
-    for handler in handlers:
+def emit_alerts(
+    events: List[AnomalyEvent],
+    config: Optional[AlertConfig] = None,
+) -> None:
+    """Emit *events* using a handler built from *config*."""
+    cfg = config or AlertConfig()
+    handler = build_handler(cfg)
+    for event in events:
         handler(event)
