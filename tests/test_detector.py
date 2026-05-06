@@ -8,6 +8,7 @@ DEFAULT_RECORD = {"level": "INFO", "service": "api", "status": "200"}
 
 
 def _warm_up(detector: Detector, record: dict, n: int) -> None:
+    """Feed *record* into *detector* exactly *n* times to build up baseline statistics."""
     for _ in range(n):
         detector.feed(record)
 
@@ -52,3 +53,13 @@ class TestDetector:
         event = AnomalyEvent({}, "test reason", field="level")
         assert "level" in repr(event)
         assert "test reason" in repr(event)
+
+    def test_multiple_anomalous_fields_reported(self):
+        """A record with several rare values should produce one event per anomalous field."""
+        det = Detector(min_samples=5, alert_threshold=0.05)
+        _warm_up(det, DEFAULT_RECORD, 20)
+        rare = {"level": "CRITICAL", "service": "worker", "status": "503"}
+        events = det.feed(rare)
+        anomalous_fields = {e.field for e in events}
+        # All three field values are new/rare, so each should trigger an event.
+        assert anomalous_fields == {"level", "service", "status"}
