@@ -81,3 +81,24 @@ class TestDeduplicator:
         # Advance time past the window
         with patch("logdrift.deduplicator.time.monotonic", return_value=2.0):
             assert d.is_duplicate(e) is False
+
+    def test_len_decreases_after_reset(self):
+        """len(d) should return 0 after reset, even if events were tracked."""
+        d = Deduplicator()
+        d.is_duplicate(_event(value="500"))
+        d.is_duplicate(_event(value="404"))
+        assert len(d) == 2
+        d.reset()
+        assert len(d) == 0
+
+    def test_expired_event_not_counted_in_len(self):
+        """Expired events should not contribute to len after they are purged."""
+        cfg = DeduplicatorConfig(window_seconds=1.0)
+        d = Deduplicator(cfg)
+        with patch("logdrift.deduplicator.time.monotonic", return_value=0.0):
+            d.is_duplicate(_event(value="500"))
+            d.is_duplicate(_event(value="404"))
+        # Trigger purge by checking a new event after the window expires
+        with patch("logdrift.deduplicator.time.monotonic", return_value=2.0):
+            d.is_duplicate(_event(value="503"))
+            assert len(d) == 1
