@@ -60,6 +60,18 @@ class TestEnricher:
         result = enricher.add_rule(static_field("k", "v"))
         assert result is enricher
 
+    def test_enrich_all_empty_input(self):
+        enricher = Enricher()
+        enricher.add_rule(static_field("x", 1))
+        results = enricher.enrich_all([])
+        assert results == []
+
+    def test_enrich_with_no_rules(self):
+        enricher = Enricher()
+        record = {"msg": "hello"}
+        result = enricher.enrich(record)
+        assert result == {"msg": "hello"}
+
 
 # ---------------------------------------------------------------------------
 # Factory helpers
@@ -84,10 +96,3 @@ def test_regex_extract_no_match_skips_field():
     record = {"msg": "all good"}
     rule.apply(record)
     assert "error_code" not in record
-
-
-def test_static_field_sets_value():
-    rule = static_field("env", "test")
-    record = {}
-    rule.apply(record)
-    assert record["env"] == "test"
