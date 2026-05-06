@@ -55,6 +55,17 @@ class Sampler:
         """Return a snapshot of seen / kept counters."""
         return {"seen": self._seen, "kept": self._kept}
 
+    @property
+    def drop_rate(self) -> float:
+        """Return the fraction of records dropped so far (0.0 if none seen).
+
+        Useful for monitoring how aggressively the sampler is filtering.
+        Returns a value in the range [0.0, 1.0].
+        """
+        if self._seen == 0:
+            return 0.0
+        return 1.0 - self._kept / self._seen
+
     def reset(self) -> None:
         """Reset internal counters (useful between pipeline runs)."""
         self._seen = 0
