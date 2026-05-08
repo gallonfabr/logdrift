@@ -36,12 +36,20 @@ class Report:
             "-" * 50,
         ]
         for fr in sorted(self.fields, key=lambda f: f.max_score, reverse=True):
-            top = ", ".join(fr.top_values[:5]) or "—"
+            top = ", ".join(fr.top_values[:5]) or "\u2014"
             lines.append(
                 f"  {fr.field:<20} count={fr.anomaly_count:<4}"
                 f" max_score={fr.max_score:.3f}  values=[{top}]"
             )
         return "\n".join(lines)
+
+    def top_fields(self, n: int = 5) -> List[FieldReport]:
+        """Return the *n* fields with the highest max_score, descending.
+
+        Useful for dashboards or alerts that only care about the worst
+        offenders rather than the full field list.
+        """
+        return sorted(self.fields, key=lambda f: f.max_score, reverse=True)[:n]
 
 
 def build_report(aggregator: Aggregator) -> Report:
