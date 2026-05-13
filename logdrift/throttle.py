@@ -49,6 +49,14 @@ class Throttle:
             return True
         return False
 
+    def remaining(self, field_name: str, value: str) -> int:
+        """Return the number of alerts still allowed for a key within the current window."""
+        key: _AlertKey = (field_name, value)
+        now = time.monotonic()
+        self._purge_old(key, now)
+        count = len(self._history.get(key, []))
+        return max(0, self._config.max_alerts - count)
+
     def reset(self, field_name: str, value: str) -> None:
         """Clear throttle history for a specific key."""
         self._history.pop((field_name, value), None)
